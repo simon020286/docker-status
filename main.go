@@ -16,12 +16,13 @@ import (
 	"github.com/gorilla/mux"
 )
 
+// Model struct.
 type Model struct {
-	BaseUrl    string
+	BaseURL    string
 	Containers []Container
 }
 
-// Container struct
+// Container struct.
 type Container struct {
 	Name   string
 	Status string
@@ -62,7 +63,7 @@ func main() {
 			schema = "https"
 		}
 		model := Model{
-			BaseUrl: fmt.Sprintf("%s://%s", schema, strings.Replace(r.Host, fmt.Sprintf(":%s", port), "", 1)),
+			BaseURL: fmt.Sprintf("%s://%s", schema, strings.Replace(r.Host, fmt.Sprintf(":%s", port), "", 1)),
 		}
 		containers, err := containersList(cli, model)
 		if err != nil {
@@ -114,9 +115,11 @@ func containersList(cli *client.Client, model Model) ([]Container, error) {
 	}
 
 	for _, container := range containers {
-		ports := make([]string, len(container.Ports))
-		for i := 0; i < len(ports); i++ {
-			ports[i] = fmt.Sprintf("%s:%d", model.BaseUrl, container.Ports[i].PublicPort)
+		var ports []string
+		for i := 0; i < len(container.Ports); i++ {
+			if container.Ports[i].PublicPort != 0 {
+				ports = append(ports, fmt.Sprintf("%s:%d", model.BaseURL, container.Ports[i].PublicPort))
+			}
 		}
 		data = append(data, Container{
 			ID:     container.ID,
