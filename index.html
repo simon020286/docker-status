@@ -59,7 +59,7 @@
     </style>
 </head>
 
-<body>
+<body style="width: 95%;">
     <h2>HOME</h2>
     <table>
         <thead>
@@ -68,24 +68,28 @@
                 <th>Status</th>
                 <th>Ports</th>
                 <th>Action</th>
+                <th>Delete</th>
             </tr>
         </thead>
         <tbody>
             {{range .Containers}}
-            <tr>
+            <tr id="{{.ID}}" class="container-row">
                 <td>{{ .Name }}</td>
                 <td class="status">{{ .Status }}</td>
-                <td>
+                <td class="ports">
                     {{range .Ports}}
                     <a href="{{ SafeURL . }}">{{.}}</a>
                     {{end}}
                 </td>
                 <td class="center">
                     {{if eq .Status "running"}}
-                    <button id="{{.ID}}" class="btn action" data-running="true">STOP</button>
+                    <button class="btn action" data-path="/containers/stop/{{.ID}}" data-action="stop">STOP</button>
                     {{else}}
-                    <button id="{{.ID}}" class="btn action" data-running="false">START</button>
+                    <button class="btn action" data-path="/containers/start/{{.ID}}" data-action="start">START</button>
                     {{end}}
+                </td>
+                <td>
+                    <button class="btn action" data-path="/containers/{{.ID}}" data-action="delete">DELETE</button>
                 </td>
             </tr>
             {{end}}
@@ -94,30 +98,135 @@
     <span id="errorMessage" style="display: none; color: tomato;">Si è verificato un errore. Ricarica la pagina.</span>
     <script>
         var errorMessage = document.getElementById("errorMessage");
-        var buttons = document.querySelectorAll(".action");
-        buttons.forEach(button => {
-            let id = button.id;
-            let statusElement = button.parentElement.parentElement.querySelector(".status");
-            button.onclick = () => {
-                button.innerHTML = "Loading...";
-                running = button.dataset.running === "true";
-                fetch((running ? "/stop/" : "/start/") + id)
-                .then(res => res.json())
-                .then(res => {
-                    if(res.error) {
-                        errorMessage.innerHTML = res.error;
-                        errorMessage.style.display = "block";
+
+        const initContainerRow = (tr) => {
+            const startStopButton = initButton(tr.querySelector("[data-action='start'], [data-action='stop']"));
+            const deleteButton = initButton(tr.querySelector("[data-action='delete']"));
+            const containerRow = {
+                id: tr.id,
+                get status() {
+                    return tr.querySelector(".status").innerHTML;
+                },
+                set status(value) {
+                    tr.querySelector(".status").innerHTML = value;
+                },
+                set ports(value) {
+                    const portElem = tr.querySelector(".ports");
+                    if(!value) {
+                        portElem.innerHTML = "";
                         return;
                     }
-                    button.dataset.running = (!running).toString();
-                    button.innerHTML = running ? "START" : "STOP";
-                    statusElement.innerHTML = res.status;
+                    for (const port of value) {
+                        const href = document.createElement("a");
+                        href.href = port;
+                        href.innerHTML = port;
+                        portElem.appendChild(href);
+                    }
+
+                },
+                delete: () => {
+                    tr.remove();
+                    delete containers[tr.id];
+                }
+            };
+
+            deleteButton.onclick = () => {
+                if (confirm("Sei sicuro di voler eliminare questo container?")) {
+                    deleteButton.text = "Loading...";
+                    callApi(deleteButton.path, "delete")
+                        .then(res => {
+                            containerRow.delete();
+                        })
+                        .catch(() => {
+                            deleteButton.defaultText();
+                        });
+                }
+            }
+
+            startStopButton.onclick = () => {
+                startStopButton.text = "Loading...";
+                callApi(startStopButton.path, "get")
+                    .then(res => {
+                        const currAction = startStopButton.action;
+                        const nextAction = currAction === "start" ? "stop" : "start";
+                        if (currAction != "start" && currAction != "stop")
+                            return;
+
+                        startStopButton.action = nextAction;
+                        startStopButton.path = startStopButton.path.replace(currAction, nextAction);
+                        startStopButton.text = nextAction.toUpperCase();
+                        containerRow.status = res.status;
+                        containerRow.ports = res.ports;
+                    });
+            }
+
+            return containerRow;
+        }
+
+        const callApi = (url, method) => {
+            clearError();
+            return fetch(url, {
+                method: method
+            })
+                .then(res => res.json())
+                .then(res => {
+                    if (res.error) {
+                        return Promise.reject(res.error);
+                    }
+                    return Promise.resolve(res);
                 })
                 .catch(err => {
-                    errorMessage.innerHTML = "Si è verificato un errore. Ricarica la pagina.";
-                    errorMessage.style.display = "block";
+                    err = err || "Si è verificato un errore. Ricarica la pagina.";
+                    showError(err);
+                    return Promise.reject(err);
                 });
+        }
+
+        const initButton = (button) => {
+            const defaultText = button.innerHTML;
+            const newButton = {
+                get path() {
+                    return button.dataset.path;
+                },
+                set path(value) {
+                    button.dataset.path = value;
+                },
+                get action() {
+                    return button.dataset.action;
+                },
+                set action(value) {
+                    button.dataset.action = value;
+                },
+                get text() {
+                    return button.innerHTML;
+                },
+                set text(value) {
+                    button.innerHTML = value;
+                },
+                set onclick(value) {
+                    button.onclick = value;
+                },
+                defaultText: () => {
+                    newButton.text = defaultText;
+                }
             }
+            return newButton;
+        }
+
+        const showError = (error) => {
+            errorMessage.innerHTML = error;
+            errorMessage.style.display = "block";
+        }
+
+        const clearError = () => {
+            errorMessage.innerHTML = "";
+            errorMessage.style.display = "none";
+        }
+
+        const containerRows = document.querySelectorAll(".container-row");
+        let containers = {};
+        containerRows.forEach(row => {
+            containers[row.id] = initContainerRow(row);
         });
     </script>
 </body>
