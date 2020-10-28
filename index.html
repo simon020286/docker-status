@@ -3,42 +3,30 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdn.jsdelivr.net/npm/vue/dist/vue.js"></script>
     <title>Docker</title>
     <style>
-        table {
-            border-collapse: collapse;
+        .grid-container {
+            display: grid;
+            grid-template-columns: auto 100px 300px 80px 80px;
+            grid-gap: 1px;
+            background-color: black;
+            padding: 2px;
         }
 
-        table,
-        th,
-        td {
-            border: 1px solid black;
+        .grid-container div {
+            background-color: white;
         }
 
-        table {
-            width: 100%;
-        }
-
-        th {
-            height: 50px;
+        .grid-header div {
+            font-weight: bold;
             background-color: #4CAF50;
             color: white;
-            text-align: left;
-            padding: 15px;
+            text-align: center;
         }
 
-        td {
-            padding: 15px;
-            text-align: left;
-        }
-
-        tr:nth-child(even) {
-            background-color: #f2f2f2;
-        }
-
-        tr:hover {
-            background-color: #4CAF50;
-            color: white;
+        .row {
+            grid-column: 1 / span 5;
         }
 
         .btn {
@@ -59,174 +47,149 @@
     </style>
 </head>
 
-<body style="width: 95%;">
+<body>
     <h2>HOME</h2>
-    <table>
-        <thead>
-            <tr>
-                <th>Container name</th>
-                <th>Status</th>
-                <th>Ports</th>
-                <th>Action</th>
-                <th>Delete</th>
-            </tr>
-        </thead>
-        <tbody>
-            {{range .Containers}}
-            <tr id="{{.ID}}" class="container-row">
-                <td>{{ .Name }}</td>
-                <td class="status">{{ .Status }}</td>
-                <td class="ports">
-                    {{range .Ports}}
-                    <a href="{{ SafeURL . }}">{{.}}</a>
-                    {{end}}
-                </td>
-                <td class="center">
-                    {{if eq .Status "running"}}
-                    <button class="btn action" data-path="/containers/stop/{{.ID}}" data-action="stop">STOP</button>
-                    {{else}}
-                    <button class="btn action" data-path="/containers/start/{{.ID}}" data-action="start">START</button>
-                    {{end}}
-                </td>
-                <td>
-                    <button class="btn action" data-path="/containers/{{.ID}}" data-action="delete">DELETE</button>
-                </td>
-            </tr>
-            {{end}}
-        </tbody>
-    </table>
-    <span id="errorMessage" style="display: none; color: tomato;">Si è verificato un errore. Ricarica la pagina.</span>
+    <div id="app">
+        <btn-loader class="btn" :click="reloadData" :label="'Reload'" :loading="loading"></btn-loader>
+        <div class="grid-container grid-header">
+            <div>Container name</div>
+            <div>Status</div>
+            <div>Ports</div>
+            <div>Action</div>
+            <div>Delete</div>
+        </div>
+        <template>
+            <container-row v-for="container in containers" v-bind:key="container.id"
+                v-bind:container="container" :onstart-stop="startStop.bind(null, container)"
+                :ondelete="onDelete.bind(null, container)">
+            </container-row>
+            <service-row v-for="service in services" v-bind:key="service.name" v-bind:service="service"
+                :onstart-stop-container="startStop" :ondelete-container="onDelete"></service-row>
+        </template>
+    </div>
     <script>
-        var errorMessage = document.getElementById("errorMessage");
-
-        const initContainerRow = (tr) => {
-            const startStopButton = initButton(tr.querySelector("[data-action='start'], [data-action='stop']"));
-            const deleteButton = initButton(tr.querySelector("[data-action='delete']"));
-            const containerRow = {
-                id: tr.id,
-                get status() {
-                    return tr.querySelector(".status").innerHTML;
-                },
-                set status(value) {
-                    tr.querySelector(".status").innerHTML = value;
-                },
-                set ports(value) {
-                    const portElem = tr.querySelector(".ports");
-                    if(!value) {
-                        portElem.innerHTML = "";
-                        return;
-                    }
-                    for (const port of value) {
-                        const href = document.createElement("a");
-                        href.href = port;
-                        href.innerHTML = port;
-                        portElem.appendChild(href);
-                    }
-
-                },
-                delete: () => {
-                    tr.remove();
-                    delete containers[tr.id];
-                }
-            };
-
-            deleteButton.onclick = () => {
-                if (confirm("Sei sicuro di voler eliminare questo container?")) {
-                    deleteButton.text = "Loading...";
-                    callApi(deleteButton.path, "delete")
-                        .then(res => {
-                            containerRow.delete();
-                        })
-                        .catch(() => {
-                            deleteButton.defaultText();
-                        });
-                }
-            }
-
-            startStopButton.onclick = () => {
-                startStopButton.text = "Loading...";
-                callApi(startStopButton.path, "get")
-                    .then(res => {
-                        const currAction = startStopButton.action;
-                        const nextAction = currAction === "start" ? "stop" : "start";
-                        if (currAction != "start" && currAction != "stop")
-                            return;
-
-                        startStopButton.action = nextAction;
-                        startStopButton.path = startStopButton.path.replace(currAction, nextAction);
-                        startStopButton.text = nextAction.toUpperCase();
-                        containerRow.status = res.status;
-                        containerRow.ports = res.ports;
-                    });
-            }
-
-            return containerRow;
-        }
-
-        const callApi = (url, method) => {
-            clearError();
-            return fetch(url, {
-                method: method
-            })
+        const loadData = (data) => {
+            data.loading = true;
+            return fetch("/containers")
                 .then(res => res.json())
                 .then(res => {
-                    if (res.error) {
-                        return Promise.reject(res.error);
-                    }
-                    return Promise.resolve(res);
+                    data.containers = (res.containers || []).map(container => {
+                        container.loading = false;
+                        return container;
+                    });
+                    data.services = (res.services || []).map(service => {
+                        service.containers = service.containers.map(container => {
+                            container.loading = false;
+                            return container;
+                        })
+                        return service;
+                    });
+                    data.loading = false;
                 })
-                .catch(err => {
-                    err = err || "Si è verificato un errore. Ricarica la pagina.";
-                    showError(err);
-                    return Promise.reject(err);
+                .catch(() => {
+                    data.loading = false;
                 });
         }
 
-        const initButton = (button) => {
-            const defaultText = button.innerHTML;
-            const newButton = {
-                get path() {
-                    return button.dataset.path;
+        Vue.component('service-row', {
+            props: {
+                service: Object,
+                onstartStopContainer: Function,
+                ondeleteContainer: Function,
+            },
+            template: `<div class="row grid-container">
+                <div class="row">{{ service.name }}</div>
+                <container-row v-for="container in service.containers" v-bind:key="container.id"
+                                v-bind:container="container" 
+                                :onstart-stop="onstartStopContainer.bind(null, container)"
+                                :ondelete="ondeleteContainer.bind(null, container)">
+                            </container-row></div>`
+        });
+
+        Vue.component('container-row', {
+            props: {
+                container: Object,
+                onstartStop: Function,
+                ondelete: Function,
+            },
+            computed: {
+                startStopBtn: function () {
+                    if (this.container.loading) {
+                        return "loading";
+                    }
+                    return this.container.status === "running" ? "STOP" : "START"
+                }
+            },
+            template: `<div class="row grid-container">
+                    <div>{{ container.name }}</div>
+                    <div class="center">{{ container.status }}</div>
+                    <div>
+                        <div v-for="port in container.ports">
+                            <a v-bind:href="port">{{ port }}</a>
+                        </div>
+                    </div>
+                    <div class="center">
+                        <btn-loader class="btn" :click="onstartStop" :label="startStopBtn" :loading="container.loading"></btn-loader>
+                    </div>
+                    <div class="center">
+                        <btn-loader class="btn" :click="ondelete" :label="'Delete'" :loading="container.loading"></btn-loader>
+                    </div>
+                </div>`
+        });
+
+        Vue.component('btn-loader', {
+            props: {
+                label: String,
+                loading: Boolean,
+                click: Function,
+            },
+            computed: {
+                computedLabel: function () {
+                    return this.loading ? "Loading" : this.label;
                 },
-                set path(value) {
-                    button.dataset.path = value;
+            },
+            template: `<button :disabled="loading" v-on:click="click">{{ computedLabel }}</button>`,
+        })
+
+        var app = new Vue({
+            el: '#app',
+            data: {
+                containers: [],
+                services: [],
+                loading: false,
+            },
+            created: function () {
+                loadData(this);
+            },
+            methods: {
+                reloadData: function () {
+                    loadData(this);
                 },
-                get action() {
-                    return button.dataset.action;
+                startStop: function (container) {
+                    container.loading = true;
+                    const op = container.status === "running" ? "stop" : "start";
+                    fetch(`/containers/${op}/${container.id}`)
+                        .then(res => res.json())
+                        .then(res => {
+                            container.loading = false;
+                        }).catch(() => {
+                            container.loading = false;
+                        })
+
                 },
-                set action(value) {
-                    button.dataset.action = value;
-                },
-                get text() {
-                    return button.innerHTML;
-                },
-                set text(value) {
-                    button.innerHTML = value;
-                },
-                set onclick(value) {
-                    button.onclick = value;
-                },
-                defaultText: () => {
-                    newButton.text = defaultText;
+                onDelete: function (container) {
+                    container.loading = true;
+                    fetch(`/containers/${container.id}`, { method: "DELETE" })
+                        .then(res => res.json())
+                        .then(res => {
+                            const index = this.containers.indexOf(container);
+                            containers.splice(index);
+                        })
+                        .catch(() => {
+                            container.loading = false;
+                        })
                 }
             }
-            return newButton;
-        }
-
-        const showError = (error) => {
-            errorMessage.innerHTML = error;
-            errorMessage.style.display = "block";
-        }
-
-        const clearError = () => {
-            errorMessage.innerHTML = "";
-            errorMessage.style.display = "none";
-        }
-
-        const containerRows = document.querySelectorAll(".container-row");
-        let containers = {};
-        containerRows.forEach(row => {
-            containers[row.id] = initContainerRow(row);
         });
     </script>
 </body>

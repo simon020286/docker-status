@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"docker-status/utils"
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -17,35 +19,6 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/gorilla/mux"
 )
-
-// Model struct.
-type Model struct {
-	BaseURL    string
-	Containers []Container
-}
-
-// Container struct.
-type Container struct {
-	Name   string   `json:"name"`
-	Status string   `json:"status"`
-	ID     string   `json:"id"`
-	Ports  []string `json:"ports"`
-}
-
-func newContainer(container types.Container, baseURL string) *Container {
-	var ports []string
-	for i := 0; i < len(container.Ports); i++ {
-		if container.Ports[i].PublicPort != 0 {
-			ports = append(ports, fmt.Sprintf("%s:%d", baseURL, container.Ports[i].PublicPort))
-		}
-	}
-	return &Container{
-		ID:     container.ID,
-		Name:   strings.Join(container.Names, " ")[1:],
-		Status: container.State,
-		Ports:  ports,
-	}
-}
 
 func main() {
 
@@ -62,32 +35,37 @@ func main() {
 
 	router := mux.NewRouter().StrictSlash(true)
 
-	funcMap := template.FuncMap{
-		"SafeURL": func(s string) template.URL {
-			return template.URL(s)
-		},
-	}
-
-	indexTmp := template.New("index.html").Funcs(funcMap)
-
-	indexTmp = template.Must(indexTmp.ParseFiles("index.html"))
-
 	errorTmp := template.Must(template.ParseFiles("error.html"))
 
 	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		html, err := ioutil.ReadFile("index.html")
+		if err != nil {
+			writeErrorResp(w, err)
+			return
+		}
+		w.Write(html)
+	}).Methods("GET")
+
+	router.HandleFunc("/containers", func(w http.ResponseWriter, r *http.Request) {
 		model := Model{
 			BaseURL: getBaseURL(r, port),
 		}
-		containers, err := containersList(cli, model)
+		containers, services, err := containersList(cli, model)
 		if err != nil {
 			returnError(w, errorTmp, err)
 			return
 		}
 
 		model.Containers = containers
+		model.Services = services
 
-		indexTmp.Execute(w, model)
-	}).Methods("GET")
+		jsonString, err := json.Marshal(model)
+		if err != nil {
+			writeErrorResp(w, err)
+			return
+		}
+		w.Write(jsonString)
+	})
 
 	router.HandleFunc("/containers/stop/{id}", func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -153,23 +131,41 @@ func main() {
 	log.Fatal(http.ListenAndServe(":"+port, router))
 }
 
-func containersList(cli *client.Client, model Model) ([]Container, error) {
+func containersList(cli *client.Client, model Model) ([]Container, []Compose, error) {
+	services := make(map[string]*Compose)
 	var data []Container
 
 	containers, err := cli.ContainerList(context.Background(), types.ContainerListOptions{All: true})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	for _, container := range containers {
-		data = append(data, *newContainer(container, model.BaseURL))
+		projectName := utils.ProjectName(&container)
+		if projectName == "" {
+			data = append(data, *newContainer(&container, model.BaseURL))
+			continue
+		}
+		compose, ok := services[projectName]
+		if !ok {
+			compose = newCompose(&container, model.BaseURL)
+			services[projectName] = compose
+		} else {
+			compose.Containers = append(compose.Containers, newContainer(&container, model.BaseURL))
+		}
 	}
 
 	sort.Slice(data, func(i int, j int) bool {
 		return data[i].Name < data[j].Name
 	})
 
-	return data, nil
+	var compose []Compose
+
+	for key := range services {
+		compose = append(compose, *services[key])
+	}
+
+	return data, compose, nil
 }
 
 func containerInfo(cli *client.Client, id string, baseURL string) (*Container, error) {
@@ -186,7 +182,7 @@ func containerInfo(cli *client.Client, id string, baseURL string) (*Container, e
 		return nil, fmt.Errorf("Container not found")
 	}
 
-	return newContainer(containers[0], baseURL), nil
+	return newContainer(&containers[0], baseURL), nil
 }
 
 func writeErrorResp(w http.ResponseWriter, err error) {
